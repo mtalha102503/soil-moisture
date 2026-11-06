@@ -16,6 +16,7 @@
 import {
   DATA_END,
   LOCATIONS,
+  MONTH_NAMES,
   VARIABLES,
   formatDate,
   formatMonth,
@@ -265,6 +266,36 @@ async function monthlyAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<stri
   }
 }
 
+/**
+ * A calendar month across all five years, e.g. "average soil moisture
+ * in Multan in June". For precipitation the answer is the average of
+ * the five monthly totals; for everything else, the mean hourly value.
+ */
+async function climatologyAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<string> {
+  const variable = VARIABLES[p.variable];
+  const month = p.monthOfYear!;
+  const monthName = MONTH_NAMES[month - 1];
+  if (p.variable === "precipitation") {
+    const totals: number[] = [];
+    for (const y of [2020, 2021, 2022, 2023, 2024]) {
+      const { start, end } = monthBounds(y, month);
+      const rows = await fetchRows(loc, start, end, variable.column);
+      const vals = values(rows, variable.column);
+      if (vals.length > 0) totals.push(vals.reduce((a, b) => a + b, 0));
+    }
+    if (totals.length === 0) return noData(`${loc.name} in ${monthName}`);
+    return `The average total precipitation in ${loc.name} in ${monthName} (averaged over 2020-2024) was ${fmt(average(totals), variable)} ${variable.unit}.`;
+  }
+  const vals: number[] = [];
+  for (const y of [2020, 2021, 2022, 2023, 2024]) {
+    const { start, end } = monthBounds(y, month);
+    const rows = await fetchRows(loc, start, end, variable.column);
+    vals.push(...values(rows, variable.column));
+  }
+  if (vals.length === 0) return noData(`${loc.name} in ${monthName}`);
+  return `The average ${variable.label} in ${loc.name} in ${monthName} (averaged over 2020-2024) was ${fmt(average(vals), variable)} ${variable.unit}.`;
+}
+
 async function yearlyAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<string> {
   const variable = VARIABLES[p.variable];
   const year = p.year!;
@@ -456,6 +487,10 @@ export async function answerQuestion(p: ParsedQuestion): Promise<string> {
     case "monthly_rain_total": {
       if (!p.city) return needCity();
       return monthlyAnswer(p, locationByName(p.city)!);
+    }
+    case "climatology_average": {
+      if (!p.city) return needCity();
+      return climatologyAnswer(p, locationByName(p.city)!);
     }
     case "yearly_average":
     case "yearly_max":

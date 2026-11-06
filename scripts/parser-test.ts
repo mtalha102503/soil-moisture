@@ -15,6 +15,7 @@ interface Expected {
   variable?: string;
   month?: { year: number; month: number } | null;
   year?: number | null;
+  monthOfYear?: number | null;
   season?: { name: string; year: number | null } | null;
 }
 
@@ -248,6 +249,25 @@ const CASES: { question: string; expect: Expected }[] = [
       variable: "precipitation",
     },
   },
+  {
+    // A month named with no year means that month across all years.
+    question: "What is the average soil moisture in Multan in June?",
+    expect: {
+      type: "climatology_average",
+      city: "Multan",
+      monthOfYear: 6,
+      variable: "sm_0_7",
+    },
+  },
+  {
+    question: "Multan mein June mein average barish kitni hoti hai?",
+    expect: {
+      type: "climatology_average",
+      city: "Multan",
+      monthOfYear: 6,
+      variable: "precipitation",
+    },
+  },
 ];
 
 let failures = 0;
@@ -261,6 +281,7 @@ for (const { question, expect } of CASES) {
     variable: p.variable,
     month: p.month,
     year: p.year,
+    monthOfYear: p.monthOfYear,
     season: p.season,
   };
   const problems: string[] = [];

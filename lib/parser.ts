@@ -33,6 +33,7 @@ export type QuestionType =
   | "monthly_max"
   | "monthly_min"
   | "monthly_rain_total"
+  | "climatology_average"
   | "yearly_average"
   | "yearly_max"
   | "yearly_min"
@@ -59,6 +60,8 @@ export interface ParsedQuestion {
   time: string | null;
   /** Set when only a month + year were given. */
   month: { year: number; month: number } | null;
+  /** Set when a month was named with no year, e.g. "in June" (all years). */
+  monthOfYear: number | null;
   /** Set when only a year was given, e.g. "in 2021". */
   year: number | null;
   /** Every 4-digit year mentioned (kept for future comparisons). */
@@ -155,11 +158,12 @@ function parseDate(q: string): {
   date: string | null;
   month: { year: number; month: number } | null;
   year: number | null;
+  monthOfYear: number | null;
 } {
   let m = q.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
   if (m) {
     const date = makeDate(+m[1], +m[2], +m[3]);
-    if (date) return { date, month: null, year: null };
+    if (date) return { date, month: null, year: null, monthOfYear: null };
   }
   // "14 May 2023", "1 January 2020", "14th May 2023"
   m = q.match(
@@ -170,7 +174,7 @@ function parseDate(q: string): {
   );
   if (m) {
     const date = makeDate(+m[3], monthIndex(m[2]) + 1, +m[1]);
-    if (date) return { date, month: null, year: null };
+    if (date) return { date, month: null, year: null, monthOfYear: null };
   }
   // "May 14, 2023", "January 1 2020"
   m = q.match(
@@ -181,7 +185,7 @@ function parseDate(q: string): {
   );
   if (m) {
     const date = makeDate(+m[3], monthIndex(m[1]) + 1, +m[2]);
-    if (date) return { date, month: null, year: null };
+    if (date) return { date, month: null, year: null, monthOfYear: null };
   }
   // "June 2022" - month and year only
   m = q.match(new RegExp(`\\b(${MONTH_PATTERN})\\s+(\\d{4})\\b`, "i"));
@@ -190,14 +194,20 @@ function parseDate(q: string): {
       date: null,
       month: { year: +m[2], month: monthIndex(m[1]) + 1 },
       year: null,
+      monthOfYear: null,
     };
+  }
+  // "in June" - a month named with no year (that month, in all years)
+  m = q.match(new RegExp(`\\b(${MONTH_PATTERN})\\b`, "i"));
+  if (m) {
+    return { date: null, month: null, year: null, monthOfYear: monthIndex(m[1]) + 1 };
   }
   // "in 2021" - a bare year only
   m = q.match(/\b(\d{4})\b/);
   if (m) {
-    return { date: null, month: null, year: +m[1] };
+    return { date: null, month: null, year: +m[1], monthOfYear: null };
   }
-  return { date: null, month: null, year: null };
+  return { date: null, month: null, year: null, monthOfYear: null };
 }
 
 function parseTime(q: string): string | null {
@@ -236,6 +246,7 @@ function parseType(
     date: string | null;
     month: { year: number; month: number } | null;
     year: number | null;
+    monthOfYear: number | null;
     season: { name: SeasonName; year: number | null } | null;
     time: string | null;
     variable: VariableKey;
@@ -290,6 +301,7 @@ function parseType(
     }
     return "yearly_average";
   }
+  if (ctx.monthOfYear !== null) return "climatology_average";
   if (
     !ctx.date &&
     /(overall|in total|all years|whole|entire|full period)/.test(q)
@@ -314,14 +326,14 @@ export function parseQuestion(question: string): ParsedQuestion {
   const raw = question.trim();
   const q = normalize(raw);
   const cities = findCities(q);
-  const { date, month, year } = parseDate(q);
+  const { date, month, year, monthOfYear } = parseDate(q);
   const season = parseSeason(q);
   const years = Array.from(
     new Set((q.match(/\b\d{4}\b/g) ?? []).map((s) => parseInt(s, 10)))
   );
   const time = parseTime(q);
   const variable = parseVariable(q);
-  const type = parseType(q, { date, month, year, season, time, variable });
+  const type = parseType(q, { date, month, year, monthOfYear, season, time, variable });
   return {
     type,
     city: cities[0] ?? null,
@@ -329,6 +341,7 @@ export function parseQuestion(question: string): ParsedQuestion {
     date,
     time,
     month,
+    monthOfYear,
     year,
     years,
     season,
