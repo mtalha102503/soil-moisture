@@ -3,9 +3,14 @@
  * against public.soil_moisture_cleaned and formats the result as a
  * natural sentence in the same style as the generated Q&A pairs.
  *
- * Every query is narrow - a single point in time, one day (24 rows) or
- * one month (<= 744 rows) for one location. The full table is never
- * fetched.
+ * Every query is narrow - a single point in time, one day (24 rows),
+ * one month (<= 744 rows) or, for year, season and overall questions,
+ * one location's rows for that period, fetched in pages of 1,000.
+ * The full table is never fetched.
+ *
+ * Questions are understood by intent (city + period + variable +
+ * aggregation), not by exact wording, so rephrased questions such as
+ * "Multan 2021 average soil moisture kitna tha?" work as well.
  */
 
 import {
@@ -29,6 +34,10 @@ export const HELP_ANSWER = [
   '"What was the average soil moisture in Faisalabad on 10 June 2022?"',
   '"How much rain fell in Faisalabad on 18 July 2022?"',
   '"What was the average soil moisture in Faisalabad in June 2022?"',
+  '"What was the average soil moisture in Multan in 2021?"',
+  '"How much rain fell in Lahore in the monsoon of 2022?"',
+  '"What is the overall average soil moisture in Lahore?"',
+  '"Which year was the wettest in Multan?"',
   '"Which city was wetter on 14 May 2023, Lahore or Multan?"',
   '"Should I irrigate in Multan on 1 January 2020?"',
   '"How many question-answer pairs are in the dataset?"',
@@ -57,6 +66,51 @@ function monthBounds(year: number, month: number): { start: string; end: string 
   return { start, end };
 }
 
+function yearBounds(year: number): { start: string; end: string } {
+  const start = new Date(Date.UTC(year, 0, 1)).toISOString();
+  const end = new Date(Date.UTC(year + 1, 0, 1)).toISOString();
+  return { start, end };
+}
+
+/**
+ * Season definitions used by this chatbot (northern-hemisphere, Pakistan):
+ * monsoon June-September, summer May-July, winter December-February,
+ * spring March-April, autumn October-November.
+ */
+function seasonBounds(
+  season: string,
+  year: number
+): { start: string; end: string } {
+  const y = year;
+  switch (season) {
+    case "monsoon":
+      return {
+        start: new Date(Date.UTC(y, 5, 1)).toISOString(),
+        end: new Date(Date.UTC(y, 9, 1)).toISOString(),
+      };
+    case "summer":
+      return {
+        start: new Date(Date.UTC(y, 4, 1)).toISOString(),
+        end: new Date(Date.UTC(y, 7, 1)).toISOString(),
+      };
+    case "winter":
+      return {
+        start: new Date(Date.UTC(y, 11, 1)).toISOString(),
+        end: new Date(Date.UTC(y + 1, 2, 1)).toISOString(),
+      };
+    case "spring":
+      return {
+        start: new Date(Date.UTC(y, 2, 1)).toISOString(),
+        end: new Date(Date.UTC(y, 4, 1)).toISOString(),
+      };
+    default: // autumn
+      return {
+        start: new Date(Date.UTC(y, 9, 1)).toISOString(),
+        end: new Date(Date.UTC(y, 11, 1)).toISOString(),
+      };
+  }
+}
+
 async function fetchRows(
   loc: LocationInfo,
   startIso: string,
@@ -75,6 +129,34 @@ async function fetchRows(
     .limit(1000);
   if (error) throw new Error(`Database error: ${error.message}`);
   return (data ?? []) as unknown as Row[];
+}
+
+/** Fetch every row in a period for one location, in pages of 1,000. */
+async function fetchAllRows(
+  loc: LocationInfo,
+  startIso: string,
+  endIso: string,
+  column: string
+): Promise<Row[]> {
+  const supabase = getSupabase();
+  const pageSize = 1000;
+  const all: Row[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("soil_moisture_cleaned")
+      .select(`recorded_at, ${column}`)
+      .eq("latitude", loc.latitude)
+      .eq("longitude", loc.longitude)
+      .gte("recorded_at", startIso)
+      .lt("recorded_at", endIso)
+      .order("recorded_at", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw new Error(`Database error: ${error.message}`);
+    const page = (data ?? []) as unknown as Row[];
+    all.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return all;
 }
 
 function values(rows: Row[], column: string): number[] {
@@ -165,9 +247,101 @@ async function monthlyAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<stri
   const rows = await fetchRows(loc, start, end, variable.column);
   const vals = values(rows, variable.column);
   if (vals.length === 0) return noData(`${loc.name} in ${formatMonth(year, month)}`);
+  const monthStr = formatMonth(year, month);
+  switch (p.type) {
+    case "monthly_max":
+      return `The maximum ${variable.label} in ${loc.name} in ${monthStr} was ${fmt(Math.max(...vals), variable)} ${variable.unit}.`;
+    case "monthly_min":
+      return `The minimum ${variable.label} in ${loc.name} in ${monthStr} was ${fmt(Math.min(...vals), variable)} ${variable.unit}.`;
+    case "monthly_rain_total": {
+      const total = vals.reduce((a, b) => a + b, 0);
+      return `The total precipitation in ${loc.name} in ${monthStr} was ${fmt(total, variable)} ${variable.unit}.`;
+    }
+    default:
+      return (
+        `The average ${variable.label} in ${loc.name} in ${monthStr} ` +
+        `was ${fmt(average(vals), variable)} ${variable.unit}.`
+      );
+  }
+}
+
+async function yearlyAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<string> {
+  const variable = VARIABLES[p.variable];
+  const year = p.year!;
+  const { start, end } = yearBounds(year);
+  const rows = await fetchAllRows(loc, start, end, variable.column);
+  const vals = values(rows, variable.column);
+  if (vals.length === 0) return noData(`${loc.name} in ${year}`);
+  switch (p.type) {
+    case "yearly_max":
+      return `The maximum ${variable.label} in ${loc.name} in ${year} was ${fmt(Math.max(...vals), variable)} ${variable.unit}.`;
+    case "yearly_min":
+      return `The minimum ${variable.label} in ${loc.name} in ${year} was ${fmt(Math.min(...vals), variable)} ${variable.unit}.`;
+    case "yearly_rain_total": {
+      const total = vals.reduce((a, b) => a + b, 0);
+      return `The total precipitation in ${loc.name} in ${year} was ${fmt(total, variable)} ${variable.unit}.`;
+    }
+    default:
+      return `The average ${variable.label} in ${loc.name} in ${year} was ${fmt(average(vals), variable)} ${variable.unit}.`;
+  }
+}
+
+async function seasonAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<string> {
+  const variable = VARIABLES[p.variable];
+  const season = p.season!;
+  const years =
+    season.year !== null
+      ? [season.year]
+      : [2020, 2021, 2022, 2023, 2024];
+  const vals: number[] = [];
+  for (const y of years) {
+    const { start, end } = seasonBounds(season.name, y);
+    const rows = await fetchAllRows(loc, start, end, variable.column);
+    vals.push(...values(rows, variable.column));
+  }
+  const label =
+    season.year !== null
+      ? `the ${season.name} of ${season.year}`
+      : `the ${season.name} season (2020-2024)`;
+  if (vals.length === 0) return noData(`${loc.name} in ${label}`);
+  if (p.type === "season_rain_total") {
+    const total = vals.reduce((a, b) => a + b, 0);
+    return `The total precipitation in ${loc.name} in ${label} was ${fmt(total, variable)} ${variable.unit}.`;
+  }
+  return `The average ${variable.label} in ${loc.name} in ${label} was ${fmt(average(vals), variable)} ${variable.unit}.`;
+}
+
+async function overallAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<string> {
+  const variable = VARIABLES[p.variable];
+  const from = yearBounds(2020).start; // 2020-01-01
+  const to = yearBounds(2025).start; // 2025-01-01, exclusive end
+  const rows = await fetchAllRows(loc, from, to, variable.column);
+  const vals = values(rows, variable.column);
+  if (vals.length === 0) return noData(`${loc.name} overall`);
+  if (p.variable === "precipitation") {
+    const total = vals.reduce((a, b) => a + b, 0);
+    return `The total precipitation in ${loc.name} across the whole dataset (2020-2024) was ${fmt(total, variable)} ${variable.unit}.`;
+  }
+  return `The overall average ${variable.label} in ${loc.name} across the whole dataset (2020-2024) was ${fmt(average(vals), variable)} ${variable.unit}.`;
+}
+
+async function yearExtremeAnswer(p: ParsedQuestion, loc: LocationInfo): Promise<string> {
+  const variable = VARIABLES[p.variable];
+  const perYear: { year: number; avg: number }[] = [];
+  for (const y of [2020, 2021, 2022, 2023, 2024]) {
+    const { start, end } = yearBounds(y);
+    const rows = await fetchAllRows(loc, start, end, variable.column);
+    const vals = values(rows, variable.column);
+    if (vals.length > 0) perYear.push({ year: y, avg: average(vals) });
+  }
+  if (perYear.length === 0) return noData(`${loc.name}`);
+  const wantMax = p.type === "wettest_year";
+  perYear.sort((a, b) => (wantMax ? b.avg - a.avg : a.avg - b.avg));
+  const best = perYear[0];
+  const word = wantMax ? "wettest" : "driest";
   return (
-    `The average ${variable.label} in ${loc.name} in ${formatMonth(year, month)} ` +
-    `was ${fmt(average(vals), variable)} ${variable.unit}.`
+    `${best.year} was the ${word} year in ${loc.name}, with an average ` +
+    `${variable.label} of ${fmt(best.avg, variable)} ${variable.unit}.`
   );
 }
 
@@ -276,9 +450,34 @@ export async function answerQuestion(p: ParsedQuestion): Promise<string> {
       if (!p.city) return needCity();
       return irrigationAnswer(p, locationByName(p.city)!);
     }
-    case "monthly_average": {
+    case "monthly_average":
+    case "monthly_max":
+    case "monthly_min":
+    case "monthly_rain_total": {
       if (!p.city) return needCity();
       return monthlyAnswer(p, locationByName(p.city)!);
+    }
+    case "yearly_average":
+    case "yearly_max":
+    case "yearly_min":
+    case "yearly_rain_total": {
+      if (!p.city) return needCity();
+      if (p.year === null) return needDate();
+      return yearlyAnswer(p, locationByName(p.city)!);
+    }
+    case "season_average":
+    case "season_rain_total": {
+      if (!p.city) return needCity();
+      return seasonAnswer(p, locationByName(p.city)!);
+    }
+    case "overall_average": {
+      if (!p.city) return needCity();
+      return overallAnswer(p, locationByName(p.city)!);
+    }
+    case "wettest_year":
+    case "driest_year": {
+      if (!p.city) return needCity();
+      return yearExtremeAnswer(p, locationByName(p.city)!);
     }
     case "point_value": {
       if (!p.city) return needCity();

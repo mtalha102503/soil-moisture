@@ -34,6 +34,14 @@ const EXAMPLE_QUESTIONS: { label: string; question: string }[] = [
     question: "What was the average soil moisture in Faisalabad in June 2022?",
   },
   {
+    label: "Yearly average",
+    question: "What was the average soil moisture in Multan in 2021?",
+  },
+  {
+    label: "Monsoon rain",
+    question: "How much rain fell in Lahore in the monsoon of 2022?",
+  },
+  {
     label: "City comparison",
     question: "Which city was wetter on 14 May 2023, Lahore or Multan?",
   },

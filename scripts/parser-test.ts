@@ -14,6 +14,8 @@ interface Expected {
   time?: string | null;
   variable?: string;
   month?: { year: number; month: number } | null;
+  year?: number | null;
+  season?: { name: string; year: number | null } | null;
 }
 
 const CASES: { question: string; expect: Expected }[] = [
@@ -130,6 +132,122 @@ const CASES: { question: string; expect: Expected }[] = [
       variable: "sm_28_100",
     },
   },
+  {
+    question: "What was the average soil moisture in Multan in 2021?",
+    expect: {
+      type: "yearly_average",
+      city: "Multan",
+      date: null,
+      month: null,
+      year: 2021,
+      variable: "sm_0_7",
+    },
+  },
+  {
+    // Same question, different wording and word order (Roman Urdu mix).
+    question: "Multan mein 2021 mein average soil moisture kitna tha?",
+    expect: { type: "yearly_average", city: "Multan", year: 2021, variable: "sm_0_7" },
+  },
+  {
+    question: "In 2021, what was Multan's average soil moisture?",
+    expect: { type: "yearly_average", city: "Multan", year: 2021, variable: "sm_0_7" },
+  },
+  {
+    // No aggregation word at all - a bare year defaults to the yearly average.
+    question: "Tell me the soil moisture in Multan in 2021",
+    expect: { type: "yearly_average", city: "Multan", year: 2021, variable: "sm_0_7" },
+  },
+  {
+    question: "How much rain fell in Lahore in 2023?",
+    expect: {
+      type: "yearly_rain_total",
+      city: "Lahore",
+      year: 2023,
+      variable: "precipitation",
+    },
+  },
+  {
+    question: "What was the maximum temperature in Faisalabad in 2022?",
+    expect: {
+      type: "yearly_max",
+      city: "Faisalabad",
+      year: 2022,
+      variable: "temperature",
+    },
+  },
+  {
+    question: "How much rain fell in Lahore in the monsoon of 2022?",
+    expect: {
+      type: "season_rain_total",
+      city: "Lahore",
+      season: { name: "monsoon", year: 2022 },
+      variable: "precipitation",
+    },
+  },
+  {
+    question: "What was the average soil moisture in Multan in the monsoon season?",
+    expect: {
+      type: "season_average",
+      city: "Multan",
+      season: { name: "monsoon", year: null },
+      variable: "sm_0_7",
+    },
+  },
+  {
+    question: "What is the overall average soil moisture in Lahore?",
+    expect: { type: "overall_average", city: "Lahore", variable: "sm_0_7" },
+  },
+  {
+    question: "Which year was the wettest in Multan?",
+    expect: { type: "wettest_year", city: "Multan", variable: "sm_0_7" },
+  },
+  {
+    question: "Which year was the driest in Lahore?",
+    expect: { type: "driest_year", city: "Lahore", variable: "sm_0_7" },
+  },
+  {
+    question: "What was the maximum temperature in Lahore in June 2022?",
+    expect: {
+      type: "monthly_max",
+      city: "Lahore",
+      month: { year: 2022, month: 6 },
+      variable: "temperature",
+    },
+  },
+  {
+    question: "How much rain fell in Multan in July 2021?",
+    expect: {
+      type: "monthly_rain_total",
+      city: "Multan",
+      month: { year: 2021, month: 7 },
+      variable: "precipitation",
+    },
+  },
+  {
+    // Bare average question with no time reference at all -> overall.
+    question: "Multan ka average soil moisture kitna hai?",
+    expect: { type: "overall_average", city: "Multan", variable: "sm_0_7" },
+  },
+  {
+    // Abbreviated month name.
+    question: "What was the average soil moisture in Lahore in Sep 2023?",
+    expect: {
+      type: "monthly_average",
+      city: "Lahore",
+      month: { year: 2023, month: 9 },
+      variable: "sm_0_7",
+    },
+  },
+  {
+    // Roman Urdu rain question for a year.
+    question: "Lahore mein 2022 mein kitni barish hui?",
+    expect: {
+      type: "yearly_rain_total",
+      city: "Lahore",
+      year: 2022,
+      variable: "precipitation",
+    },
+  },
 ];
 
 let failures = 0;
@@ -142,6 +260,8 @@ for (const { question, expect } of CASES) {
     time: p.time,
     variable: p.variable,
     month: p.month,
+    year: p.year,
+    season: p.season,
   };
   const problems: string[] = [];
   for (const [key, want] of Object.entries(expect)) {
